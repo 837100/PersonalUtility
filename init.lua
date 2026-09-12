@@ -406,11 +406,19 @@ local function handleQuestText(text)
     text = text or ""
 
     text = text:gsub("%s+", " ")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+
+    print("")
+    print("========== OCR 결과 ==========")
+    print(text ~= "" and text or "(인식된 텍스트 없음)")
+    print("===============================")
 
     local hasKActionText =
         text:find("반복", 1, true) ~= nil
         or text:find("처치", 1, true) ~= nil
         or text:find("클리어", 1, true) ~= nil
+        or text:find("까지", 1, true) ~= nil
+        or text:find("한번에", 1, true) ~= nil
     local hasShortcutText = text:find("바로가기", 1, true) ~= nil
 
     if hasShortcutText and not shortcutTextDetected then
@@ -428,7 +436,7 @@ local function handleQuestText(text)
 
     if hasKActionText and not kActionTextDetected then
 
-        print("'반복', '처치' 또는 '클리어' 텍스트 발견: K 3회 입력")
+        print("'반복', '처치', '클리어' 또는 '한번에' 텍스트 발견: K 3회 입력")
         startKActionMacro()
 
     end
@@ -439,16 +447,14 @@ local function handleQuestText(text)
         return
     end
 
-    print("--------------------------------")
-    print("OCR 결과:")
-    print(text)
-    print("--------------------------------")
+    local matched = false
 
     for _, item in ipairs(QUEST_ACTIONS) do
 
         if text:find(item.keyword, 1, true) then
 
             print("퀘스트 발견: " .. item.keyword)
+            matched = true
 
             if not macroRunning then
 
@@ -459,13 +465,26 @@ local function handleQuestText(text)
 
             end
 
-            return
+            break
 
         end
 
     end
 
+    if matched then
+        return
+    end
+
     print("일치하는 퀘스트 없음")
+
+    startMacro(
+        {
+            {key = "tab", wait = 1},
+            {key = "tab", wait = 0.5},
+            {key = "tab", wait = 0.5}
+        },
+        "일치하는 퀘스트 없음"
+    )
 
 end
 
@@ -484,6 +503,7 @@ local function isQuestCompleted(image)
     local height = size.h
 
     local yellowCount = 0
+    local purpleCount = 0
     local sampleCount = 0
 
     -- 일정 간격으로 픽셀 샘플링
@@ -513,6 +533,14 @@ local function isQuestCompleted(image)
                     yellowCount = yellowCount + 1
                 end
 
+                -- 추가 감지: 96,76,207 ~ 214,71,223 근처 보라/남색 계열
+                if r >= 96 and r <= 214
+                    and g >= 71 and g <= 223
+                    and b >= 207 and b <= 223 then
+
+                    purpleCount = purpleCount + 1
+                end
+
             end
         end
     end
@@ -521,17 +549,19 @@ local function isQuestCompleted(image)
         return false
     end
 
-    local ratio = yellowCount / sampleCount
+    local yellowRatio = yellowCount / sampleCount
+    local purpleRatio = purpleCount / sampleCount
 
     print(
         string.format(
-            "완료 색상 비율: %.1f%%",
-            ratio * 100
+            "완료 색상 비율: %.1f%% / 보라색 비율: %.1f%%",
+            yellowRatio * 100,
+            purpleRatio * 100
         )
     )
 
-    -- 노란색 계열이 20% 이상이면 완료 상태
-    return ratio >= 0.20
+    -- 노란색 계열 또는 지정된 보라색 계열이 일정 비율 이상이면 완료 상태
+    return yellowRatio >= 0.20 or purpleRatio >= 0.05
 end
 
 local function scanQuest()
