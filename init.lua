@@ -36,9 +36,11 @@ local TESSERACT_PATH = "/opt/homebrew/bin/tesseract"
 local OCR_IMAGE_PATH =
     os.getenv("HOME") .. "/.hammerspoon/quest_ocr.png"
 
+local STATUS_DURATION = 0.6
+
 local function showStatus(message)
 
-    hs.alert.show("퀘스트 매크로: " .. message)
+    hs.alert.show("퀘스트: " .. message, STATUS_DURATION)
 
 end
 
@@ -50,6 +52,8 @@ end
 local function pressKey(key, holdTime, callback)
 
     holdTime = holdTime or KEY_HOLD_TIME
+
+    showStatus("키 입력: " .. key)
 
     hs.eventtap.event.newKeyEvent({}, key, true):post()
 
@@ -67,6 +71,7 @@ end
 
 local startMacro
 local scheduleNoMacroFallback
+local startShortcutMacro
 
 
 -- ==========================================
@@ -246,8 +251,7 @@ startMacro = function(steps, actionName)
     currentStep = 1
     lastAction = actionName
 
-    showStatus(actionName .. " 매크로 시작")
-
+    showStatus("매크로 실행: " .. actionName)
     print("매크로 시작: " .. actionName)
 
     runNextStep()
@@ -266,8 +270,7 @@ local function getGameScreen()
     if not screen then
 
         print("ERROR: LG FULL HD 모니터를 찾지 못했습니다.")
-        showStatus("LG FULL HD 모니터를 찾지 못했습니다")
-
+        showStatus("오류")
         return nil
 
     end
@@ -316,10 +319,19 @@ local QUEST_ACTIONS = {
 -- OCR 결과 처리
 -- ==========================================
 
-local function startKActionMacro()
+local function startKActionMacro(onComplete)
 
     if kActionRunning or shortcutRunning or macroRunning or kRunning then
-        return
+        print(
+            string.format(
+                "K 3회 매크로 시작 불가: kActionRunning=%s, shortcutRunning=%s, macroRunning=%s, kRunning=%s",
+                tostring(kActionRunning),
+                tostring(shortcutRunning),
+                tostring(macroRunning),
+                tostring(kRunning)
+            )
+        )
+        return false
     end
 
     if noMacroTimer then
@@ -330,8 +342,7 @@ local function startKActionMacro()
     kActionRunning = true
     kActionCount = 0
 
-    showStatus("K 3회 매크로 시작")
-
+    showStatus("매크로 실행: K 3회")
     local function pressKActionKey()
 
         kActionCount = kActionCount + 1
@@ -345,8 +356,12 @@ local function startKActionMacro()
             end
 
             kActionRunning = false
-            showStatus("K 3회 매크로 완료")
+            showStatus("매크로 완료")
             print("K 3회 매크로 완료")
+
+            if onComplete then
+                onComplete()
+            end
 
         end
 
@@ -356,10 +371,12 @@ local function startKActionMacro()
 
     kActionTimer = hs.timer.doEvery(1, pressKActionKey)
 
+    return true
+
 end
 
 
-local function startShortcutMacro()
+startShortcutMacro = function()
 
     if shortcutRunning or kActionRunning or macroRunning or kRunning then
         return
@@ -373,8 +390,7 @@ local function startShortcutMacro()
     shortcutRunning = true
     shortcutCount = 0
 
-    showStatus("바로가기 탭 매크로 시작")
-
+    showStatus("매크로 실행: Tab 3회")
     local function pressShortcutKey()
 
         shortcutCount = shortcutCount + 1
@@ -388,7 +404,7 @@ local function startShortcutMacro()
             end
 
             shortcutRunning = false
-            showStatus("바로가기 탭 매크로 완료")
+            showStatus("매크로 완료")
             print("바로가기 탭 매크로 완료")
 
         end
@@ -399,6 +415,19 @@ local function startShortcutMacro()
 
     shortcutTimer = hs.timer.doEvery(0.5, pressShortcutKey)
 
+end
+
+local function triggerQuestCompletion()
+    if not questCompletedDetected then
+        print("완료 처리를 위해 K 3회 입력")
+        if startKActionMacro(function()
+            print("퀘스트 완료 후 Tab 3회 입력")
+            startShortcutMacro()
+        end) then
+            questCompletedDetected = true
+            showStatus("퀘스트 완료")
+        end
+    end
 end
 
 local function handleQuestText(text)
@@ -413,9 +442,9 @@ local function handleQuestText(text)
     print(text ~= "" and text or "(인식된 텍스트 없음)")
     print("===============================")
 
-    local hasKActionText =
-        text:find("반복", 1, true) ~= nil
-        or text:find("처치", 1, true) ~= nil
+    local hasRepeatText = text:find("반복", 1, true) ~= nil
+    local hasOtherKActionText =
+        text:find("처치", 1, true) ~= nil
         or text:find("클리어", 1, true) ~= nil
         or text:find("까지", 1, true) ~= nil
         or text:find("한번에", 1, true) ~= nil
@@ -434,16 +463,23 @@ local function handleQuestText(text)
         return
     end
 
-    if hasKActionText and not kActionTextDetected then
+    if hasRepeatText and not kActionTextDetected then
 
-        print("'반복', '처치', '클리어' 또는 '한번에' 텍스트 발견: K 3회 입력")
+        print("'반복' 텍스트 발견: 퀘스트 완료 처리")
+        triggerQuestCompletion()
+
+    end
+
+    if hasOtherKActionText and not kActionTextDetected then
+
+        print("'처치', '클리어', '까지' 또는 '한번에' 텍스트 발견: K 3회 입력")
         startKActionMacro()
 
     end
 
-    kActionTextDetected = hasKActionText
+    kActionTextDetected = hasRepeatText or hasOtherKActionText
 
-    if hasKActionText then
+    if hasRepeatText or hasOtherKActionText then
         return
     end
 
@@ -653,8 +689,7 @@ local questRect = hs.geometry.rect(
     if not image then
 
         print("ERROR: 화면 캡처 실패")
-        showStatus("화면 캡처 실패")
-
+        showStatus("오류")
         ocrBusy = false
         return
 
@@ -664,22 +699,12 @@ local questRect = hs.geometry.rect(
     print("화면 캡처 성공")
 
     if isQuestCompleted(image) then
-
-    print("퀘스트 완료 상태 감지")
-
-    if not questCompletedDetected then
-        questCompletedDetected = true
-        showStatus("퀘스트 완료 감지")
-        print("완료 처리를 위해 K 3회 입력")
-        startKActionMacro()
+        print("퀘스트 완료 상태 감지")
+        triggerQuestCompletion()
+        print("OCR 및 퀘스트 매크로 실행을 건너뜁니다.")
+        ocrBusy = false
+        return
     end
-
-    print("OCR 및 퀘스트 매크로 실행을 건너뜁니다.")
-
-    ocrBusy = false
-    return
-
-end
 
 questCompletedDetected = false
 print("퀘스트 미완료 상태")
@@ -699,8 +724,7 @@ print("퀘스트 미완료 상태")
     if not saved then
 
         print("ERROR: OCR 이미지 저장 실패")
-        showStatus("OCR 이미지 저장 실패")
-
+        showStatus("오류")
         ocrBusy = false
         return
 
@@ -737,7 +761,7 @@ local task = hs.task.new(
 
         if exitCode ~= 0 then
             print("ERROR: Tesseract 실행 실패")
-            showStatus("Tesseract 실행 실패")
+            showStatus("오류")
             return
         end
 
@@ -760,8 +784,7 @@ local task = hs.task.new(
 if not task then
 
     print("ERROR: hs.task 생성 실패")
-    showStatus("OCR 작업 생성 실패")
-
+    showStatus("오류")
     ocrBusy = false
     return
 
@@ -811,8 +834,7 @@ hs.hotkey.bind(
 
         if kRunning then
 
-            showStatus("K 매크로 시작")
-
+            showStatus("시작")
             pressK()
 
             kTimer =
@@ -828,8 +850,7 @@ hs.hotkey.bind(
                 kTimer = nil
             end
 
-            showStatus("K 매크로 중지")
-
+            showStatus("중지")
         end
 
     end
@@ -859,7 +880,6 @@ hs.hotkey.bind(
             lastAction = nil
 
             showStatus("시작")
-
             print("===== QUEST MACRO START =====")
 
             scheduleNoMacroFallback()
@@ -911,7 +931,6 @@ hs.hotkey.bind(
             end
 
             showStatus("중지")
-
             print("===== QUEST MACRO STOP =====")
 
         end
